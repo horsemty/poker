@@ -251,6 +251,10 @@ class Message
 				{
 					return 13;
 				}
+				case 'A':
+				{
+					return 14;
+				}
 				default:
 				{
 					int x;
