@@ -18,6 +18,8 @@
 #include <syslog.h>
 #include <sstream>
 #include <malloc.h>
+#include "CLASS.h"
+#include "decision.h"
 //using namespace std;
 typedef long long LL;
 #define For(i,a,b) for (int i = (a); i <= (b); i++)
@@ -29,161 +31,55 @@ const char *split = "\n";
 int m_socket_id = -1;
 int my_id;
 
-
-struct Card
-{
-	int color, number;
-	Card(int c, int n): color(c), number(n) {}
-	Card() {}
-};
-
-struct Action
-{
-	int name, val;
-	/*
-		name : 0 means all in 
-		name : 1 means call 
-		name : 2 means raise 
-		name : 3 means all in 
-		name : 4 means fold
-		name : 5 means check	
-		name : 6 means blind
-	*/
-	Action(int n, int v): name(n), val(v) {}
-};
-
-struct PlayerInfo
-{
-	struct eachPlayer
-	{
-		int money, jetton;
-		int actionNum[10];
-	}P[10];
-	std::map<int, int> pMemo;
-	int pNum;
-	void init(int pid, int _jetton, int _money)
-	{
-		if (pMemo.find(pid) == pMemo.end())
-			pMemo[pid] = ++pNum;
-		int t = pMemo[pid];
-		P[t].money = _money, P[t].jetton = _jetton;
-	}
-	void addAction(int pid, int act)
-	{
-		int t = pMemo[pid];
-		P[t].actionNum[act]++;
-	}
-}pInfo;
-class Player
-{
-	public:
-		int money, numCard, pid, jetton;
-		Card card[3];
-		int identity; // 0 is normal, 1 is small blind, 2 is big blind, 3 is button
-		std::vector<Action> act; //
-		int rank, nut, bet;
-		/*
-			nut : 0 means HIGH_CARD
-			nut : 1 means ONE_PAIR
-			nut : 2 means TWO_PAIR
-			nut : 3 means THREE_OF_A_KIND
-			nut : 4 means STRAIGHT
-			nut : 5 means FLUSH
-			nut : 6 means FULL_HOUSE
-			nut : 7 means FOUR_OF_A_KIND
-			nut : 8 means STRAIGHT_FLUSH
-		 */
-		void init(int _pid, int _identity, int _jetton, int _money)
-		{
-			numCard = 0;
-			pid = _pid;
-			jetton = _jetton;
-			money = _money;
-			bet = 0;
-		}
-		void update(int _jetton, int _money)
-		{
-			jetton = _jetton;
-			money = _money;
-		}
-		void addCard(int color, int number)
-		{
-			card[numCard].color = color, card[numCard].number = number;
-			numCard++;
-		}
-		void addAction(int name, int val)
-		{
-			act.push_back(Action(name, val));
-		}
-		void moneyChange(int d)
-		{
-			jetton -= d;
-		}
-};
 Player *Me;
-
-class State
-{
-	public:
-		Card flop[5];
-		int numFlop;
-		int pot;
-		int bigBlind, smallBlind;
-		Player player[9];
-		int totPlayer = 0; //renumber the players from 1 to 8
-		std::map<int, int> playersNum;
-		std::vector<int> subPot;
-		int rank[9];
-		int maxBet = 0;
-		void addPlayer(int pid, int identity, int jetton, int money)
-		{
-			totPlayer++;
-			playersNum[pid] = totPlayer;
-			player[totPlayer].init(pid, identity, jetton, money);
-			if (pid == my_id)
-				Me = &player[totPlayer];
-		}
-		void addFlop(int color, int number)
-		{
-			flop[numFlop++] = Card(color, number);
-		}
-		void addJettonMainPot(int val)
-		{
-			pot += val;
-		}
-		void addJettonSubPot(int val)
-		{
-		}
-		void updatePlayer(int pid, int jetton, int money, int bet, int action)
-		{
-			int pos = playersNum[pid];
-			player[pos].update(jetton, money);
-			int tmp = bet - player[pos].bet;
-			player[pos].addAction(action, tmp);
-			if (tmp > maxBet)
-				maxBet = tmp;
-			player[pos].bet = bet;
-		}
-		void blind(int pid, int bet)
-		{
-			int pos = playersNum[pid];
-			if (player[pos].identity == 1)
-				smallBlind = bet;
-			else
-				bigBlind = bet;
-			player[pos].moneyChange(bet);
-		}
-		void addResult(int pid, int _rank, int nut)
-		{
-			int pos = playersNum[pid];
-			rank[_rank] = pos;
-			player[pos].rank = _rank;
-			player[pos].nut = nut;
-		}
-};
-State state[501];
+PlayerInfo pInfo;
+OP opModel;
+State state[1001];
 int currentState = 0;
+Rank *rank = new Rank;
 
+void State::addPlayer(int pid, int identity, int jetton, int money)
+{
+    totPlayer++;
+    playersNum[pid] = totPlayer;
+    player[totPlayer].init(pid, identity, jetton, money);
+    if (pid == my_id)
+    Me = &player[totPlayer];
+}
+void OP::addAction(int pid, int act, int sta)
+{
+	/*
+	std::string str = "decision";
+	str += char(Me->pid % 10 + '0');
+	FILE *f = fopen(str.c_str(), "a");
+	*/
+	if (sta >= 3)
+		sta -= 2;
+	int t = pMemo[pid];
+	int pos = state[currentState].playersNum[pid];
+	double prob = 0.0;
+	double x = (double)state[currentState].player[pos].bet * 1.0 / (state[currentState].player[pos].bet + state[currentState].player[pos].jetton);
+	if (act == 4) //fold
+	{
+		prob = this->P[t].Upgrade_weight(sta, 0, x, state[currentState].player[pos]);
+	}
+	if (act == 2 || act == 3) // raise
+	{
+		prob = this->P[t].Upgrade_weight(sta, 2, x, state[currentState].player[pos]);
+	}
+	if (act == 1) //call
+	{
+		prob = this->P[t].Upgrade_weight(sta, 1, x, state[currentState].player[pos]);
+	}
+	if (act == 5)
+		prob = 0.6;
+	state[currentState].player[pos].prob = std::max(state[currentState].player[pos].prob,prob);
+	/*
+	if (act < 5)
+		fprintf(f, "pid:%d act:%d sta:%d %.4f\n", pid, act, sta, prob);
+	fclose(f);
+	*/
+}
 class Message
 {
 	private:
@@ -194,26 +90,32 @@ class Message
 		};
 		void newGame()
 		{
-			currentState++;	
+			currentState++;
 		}
 		void seatMsg(int pid, int jetton, int money, int identity)
 		{
 			state[currentState].addPlayer(pid, identity, jetton, money);
-			pInfo.init(pid, jetton, money);
+			opModel.init(pid);
+			opModel.initRaise();
 		}
 		void inquireMsg(inqueryMessage iM)
 		{
 			for (auto i : iM.p)
 			{
+				if (state[currentState].player[state[currentState].playersNum[i[0]]].identity != -1)
+				{
+					int sta = state[currentState].numFlop;
+					opModel.addAction(i[0], i[4], sta);
+				}
 				state[currentState].updatePlayer(i[0], i[1], i[2], i[3], i[4]);
-				pInfo.addAction(i[0], i[4]);
-			}	
+				//pInfo.addAction(i[0], i[4]);
+			}
 			state[currentState].pot = iM.num;
 		}
 		void blindMsg(int pid, int bet)
 		{
 			state[currentState].blind(pid, bet);
-			pInfo.P[pInfo.pMemo[pid]].jetton -= bet;
+			//pInfo.P[pInfo.pMemo[pid]].jetton -= bet;
 		}
 		void holdCardsMsg(int color, int num)
 		{
@@ -267,15 +169,15 @@ class Message
 		{
 			char *p;
 			p = (char *)malloc(100);
-			inqueryMessage iM; 
+			inqueryMessage iM;
 			while (scanf("%s", p) != EOF)
 			{
 				if (p[0] == '/')
 					break;
 				if (p[0] == 't')
 				{
-					int num;
-					scanf("%*s, %d", &num);
+					int num = 0;
+					scanf("%*s %d", &num);
 					iM.num = num;
 				}
 				else
@@ -287,12 +189,12 @@ class Message
 					switch (action[0])
 					{
 						case 'b':
-							{	
+							{
 								player.push_back(6);
 								break;
 							}
 						case 'c':
-							{	
+							{
 								if (action[1] == 'a')
 									player.push_back(1);
 								else
@@ -300,17 +202,17 @@ class Message
 								break;
 							}
 						case 'r':
-							{	
+							{
 								player.push_back(2);
 								break;
 							}
 						case 'a':
-							{	
+							{
 								player.push_back(3);
 								break;
 							}
 						case 'f':
-							{	
+							{
 								player.push_back(4);
 								break;
 							}
@@ -366,7 +268,7 @@ class Message
 				sscanf(p, "%d:", &pid);
 				scanf("%d", &bet);
 				blindMsg(pid, bet);
-			}	
+			}
 			free(p);
 		}
 		void parseHold()
@@ -389,7 +291,7 @@ class Message
 				scanf("%s", p);
 				int num = getInt(p);
 				holdCardsMsg(color, num);
-			}			
+			}
 			free(p);
 		}
 		void parseFlop()
@@ -412,7 +314,7 @@ class Message
 				scanf("%s", p);
 				int point = getInt(p);
 				flopMsg(color, point);
-			}			
+			}
 			free(p);
 		}
 		void parseShowDown()
@@ -484,7 +386,7 @@ class Message
 						}
 				}
 				showDownMsg(rank, pid, color[0], point[0], color[1], point[1], nut);
-			}		
+			}
 			free(p);
 		}
 		void parsePotWin()
@@ -541,6 +443,42 @@ class Message
 			const char* response = "fold";
 			send(m_socket_id, response, (int)strlen(response)+1, 0);
 		}
+		void decision()
+		{
+			state[currentState].opNum = 0;
+			for (int i = 1; i <= state[currentState].totPlayer; i++)
+				if (state[currentState].player[i].identity >= 0)
+					state[currentState].opNum++;
+			int act = 0;
+			if (state[currentState].numFlop == 0)
+			{
+				act = Two_cards::Choose(state[currentState], *Me);
+			}
+			if (state[currentState].numFlop == 3)
+			{
+				act = Five_cards::Choose(state[currentState], *Me, rank);
+			}
+			if (state[currentState].numFlop == 4)
+			{
+				//act = Five_cards::Choose(state[currentState], *Me, rank);
+				act = Six_cards::Choose(state[currentState], *Me, rank);
+			}
+			if (state[currentState].numFlop == 5)
+			{
+				//act = Five_cards::Choose(state[currentState], *Me, rank);
+				act = Seven_cards::Choose(state[currentState], *Me, rank);
+			}
+			if (act == 1)
+				sentCall();
+			if (act == 3)
+				sentAllIn();
+			if (act == 4)
+				sentFold();
+			if (act == 5)
+				sentCheck();
+			if (act > 6)
+				sentRaise(act);
+		}
 		bool server_msg_process()
 		{
 			//FILE *f = fopen(fileName, "r");
@@ -559,7 +497,9 @@ class Message
 				if (NULL != strstr(msg, "inquire/"))
 				{
 					parseInquire();
-					sentAllIn();
+					state[currentState].maxBet = std::max(0, state[currentState].maxBet - Me->bet);
+					decision();
+					//sentAllIn();
 					//sentRaise(100);
 					//sentFold();
 				}
@@ -567,6 +507,13 @@ class Message
 				{
 					newGame();
 					parseSeat();
+					/*
+					std::string str = "decision";
+					str += char(Me->pid % 10 + '0');
+					FILE *f1 = fopen(str.c_str(), "a");
+					fprintf(f1, "%d Hands\n", currentState);
+					fclose(f1);
+					*/
 				}
 				if (NULL != strstr(msg, "blind/"))
 				{
@@ -579,14 +526,33 @@ class Message
 				if (NULL != strstr(msg, "flop/"))
 				{
 					parseFlop();
+					opModel.initRaise();
 				}
 				if (NULL != strstr(msg, "turn/"))
 				{
 					parseFlop();
+					opModel.initRaise();
 				}
 				if (NULL != strstr(msg, "river/"))
 				{
 					parseFlop();
+					opModel.initRaise();
+					/*
+					std::string str = "decision";
+					str += char(Me->pid % 10 + '0');
+					FILE *f = fopen(str.c_str(), "a");
+					for (int i = 1; i <= state[currentState].totPlayer; i++)
+						fprintf(f, "%d: %.4f\n", state[currentState].player[i].pid, state[currentState].player[i].prob);
+					for (int i = 0; i < 8; i++)
+					{
+						fprintf(f, "%d: ", i);
+						rep(j, 4)
+							rep(k, 3)
+								fprintf(f, "%.4f ", opModel.P[i].probability[j][k]);
+						fprintf(f, "\n");
+					}
+					fclose(f);
+					*/
 				}
 				if (NULL != strstr(msg, "showdown/"))
 				{
@@ -598,7 +564,7 @@ class Message
 
 				if (NULL != strstr(msg, "notify/"))
 				{
-					parseShowDown();
+					parseInquire();
 				}
 			}
 			free(msg);
@@ -632,7 +598,7 @@ int main(int argc, char* argv[])
 	m_socket_id = socket(AF_INET, SOCK_STREAM, 0);
 	//绑定自己的IP
 	sockaddr_in my_addr;
-	my_addr.sin_addr.s_addr = my_ip;	
+	my_addr.sin_addr.s_addr = my_ip;
 	my_addr.sin_family = AF_INET;
 	my_addr.sin_port = htons(my_port);
 	long flag = 1;
@@ -647,6 +613,7 @@ int main(int argc, char* argv[])
 	server_addr.sin_addr.s_addr = server_ip;
 	server_addr.sin_family = AF_INET;
 	server_addr.sin_port = htons(server_port);
+    srand((unsigned)time(NULL));
 	while (0 != connect(m_socket_id, (sockaddr*)&server_addr, sizeof(sockaddr)))
 	{
 
@@ -657,21 +624,25 @@ int main(int argc, char* argv[])
 	//向server注册
 	char reg_msg[50] = "";
 	snprintf(reg_msg, sizeof(reg_msg) - 1, "reg: %d %s need_notify\n", my_id, my_name);
+	//snprintf(reg_msg, sizeof(reg_msg) - 1, "reg: %d %s\n", my_id, my_name);
 	send(m_socket_id, reg_msg, (int)strlen(reg_msg)+1, 0);
-	Message M;	
+	Message M;
 	//开始游戏
 	M.bufferInit(my_id);
+	rank->init();
+	Two_cards::Init();
 	while (1)
 	{
 		char buffer[1024] = {'\0'};
 		int size = recv(m_socket_id, buffer, sizeof(buffer) - 1, 0);
 		if (size > 0)
 		{
-			printf("%d %d\n", pInfo.P[pInfo.pMemo[my_id]].money, pInfo.P[pInfo.pMemo[my_id]].jetton);
+			//printf("%d %d\n", pInfo.P[pInfo.pMemo[my_id]].money, pInfo.P[pInfo.pMemo[my_id]].jetton);
 			M.bufferWrite(buffer);
 			if (!M.server_msg_process())
 				break;
 		}
+		if(Me!=NULL)std::cerr<<"My jetton: "<<Me->jetton<<std::endl;
 	}
 	close(m_socket_id);
 	//char msg[50] = "end program";
